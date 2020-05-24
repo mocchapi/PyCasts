@@ -1,186 +1,657 @@
 import os
-#import vlc
+import vlc
 from appJar import gui
 import json
+import ttkthemes
+import tkinter
+import time
+import datetime
+#from PIL import Image
 
-app = gui('PyCasts','800x500')
-app.setBg('linen')
-app.setFont(size=12, family="Open Sans")
-app.setIcon('ico.gif')
-app.setLogLevel('debug')
-app.startSubWindow('secret_subwindow')
-app.addLabel('var_posY',0)
-app.addLabel('var_posX',0)
-app.stopSubWindow()
+# thumbnail image functions
+'''
+def makeThumbnail(imagepath):
+	IM=Image.open(imagepath)
+	print(IM.size)
+'''
+# misc functions
+
+def reorderLibrary():
+	global library
+	library = dict(sorted(library.items()))
 
 
-#important functions
+def setupTime():
+	setupTime = round(time.time()-starttime,3)
+	app.info(f'completed setup in {setupTime}s')
+	if setupTime > 20:
+		app.warn('setup took VERY long')
+	elif setupTime > 10:
+		app.warn('setup took longer than expected')
 
-#json loading and saving
-def save_json(data):
-	with open('data.json','w') as f:
-		print('@save_json, data: ',data)
-		writeData = json.dumps(data)
-		print('json data: ',writeData)
-		f.write(writeData)
+def cropText(text,cropnum=25):
+	if len(text) > cropnum+1: 
+		return f'{text[:cropnum]}...'
+	else:
+		return text
 
-def get_json():
-	app.debug('@get_json')
-	with open('data.json','r') as f:
-		library = json.loads(f.read())
-		return library
-
-def refresh_library():
-	app.debug('refreshing library')
-	app.emptyLabelFrame('frame_libraryView')
-	app.setLabel('var_posX',0)
-	app.setLabel('var_posY',0)
-	load_library()
-	update_remove_submenu()
-
-def load_library():
+def stopFunction():
 	try:
-		library = library_list('get')
+		stoppingtime = time.time()
 		try:
-			for item in library:
-				new_library_icon(item)
+			with open('theme.json','w') as f:
+				f.write(app.getMenuRadioButton('Ttk theme','radio_theme'))
+			app.info('saved theme.json')
 		except BaseException as e:
-			app.error(e)
-			app.warningBox('item error',e)
-	except BaseException as e:
-		app.error(e)
-
-def crop_text(text,limit):
-	if len(text) > limit:
-		if text[:limit-3].endswith(' '):
-			return (f'{text[:limit-4]}...',True)
-		else:
-			return (f'{text[:limit-3]}...',True)
-	else:
-		return (text,False)
-
-def get_names():
-	names = []
-	for item in library_list('get'):
-		names.append(item['name'])
-	return names
-
-def new_library_icon(data):
-#	app.debug(f'\n@new_library_icon, data:\n{data}\ntype:{type(data)}')
-	posX = int(app.getLabel('var_posX'))
-	posY = int(app.getLabel('var_posY'))
-	if posX == 2:
-		app.setLabel('var_posX',0)
-		app.setLabel('var_posY',posY+1)
-	else:
-		app.setLabel('var_posX',posX+1)
-	icon = f'{data["folder"]}/ico.gif'
-	name = data['name']
-	author = data['author']
-	app.openLabelFrame('frame_libraryView')
-	app.startFrame(f'library_frame_{name}',posY,posX)
-
-	try:
-		app.addImage(f'library_image_{name}',icon,0,0)
+			app.error(f'error saving theme.json: {e}')
+		updateLeftoffTime()
+		saveLibrary()
+		app.info(f'finished up in {round(time.time()-stoppingtime,3)}s')
+		app.info(f'total runtime was {round(time.time()-starttime,3)}s')
+		return True
 	except:
-		app.addImage(f'library_image_{name}','no_image.gif',0,0)
-	app.setImageSize(f'library_image_{name}',150,150)
-	app.setImageSubmitFunction(f'library_image_{name}',app.debug)
-	app.setImageMouseOver(f'library_image_{name}','play_button.gif')
+		return True
 
-	shortname = crop_text(name,12)
-	print(shortname)
-	app.addLabel(f'library_lbl_name_{name}',shortname[0],1,0)
-	if shortname[1]:
-		app.setLabelTooltip(f'library_lbl_name_{name}',name)
+def milliFormat(milliseconds,subtractH=True):
+	if subtractH:
+		milliseconds = milliseconds-3600000
+	return datetime.datetime.fromtimestamp(milliseconds / 1000).strftime('%H:%M:%S')
 
-	shortauthor = crop_text(author,15)
-	app.addLabel(f'library_lbl_author_{name}',shortauthor[0],2,0)
-	if shortauthor[1]:
-		app.setLabelTooltip(f'library_lbl_author_{name}',author)
+# player functions
 
-	app.setLabelFg(f'library_lbl_author_{name}','honeydew4')
-	app.getLabelWidget(f'library_lbl_author_{name}').config(font='Arial 10')
-	app.stopFrame()
+def closePlayerWindow():
+	vlcPlayer.set_pause(1)
+	updateLeftoffTime()
+	return True
+
+def updateLeftoffTime():
+	global library
+	library[currentlyPlaying]['leftoff']['time'] = vlcPlayer.get_position()
+
+
+def saveTimeAndFile():
+	global library
+	while True:
+		state = str(vlcPlayer.get_state()).lower().replace('state.','')
+		if state == 'playing' or state == 'paused':
+			library[currentlyPlaying]['leftoff']['file'] = "".join(app.getListBox("list_queue"))
+			updateLeftoffTime()	
+			app.debug(f'saved leftoff time & file ({library[currentlyPlaying]["leftoff"]["time"]}, {library[currentlyPlaying]["leftoff"]["file"]})')
+			saveLibrary()
+		time.sleep(5*60)
+
+def timelineScrub(name):
+	playerpos = app.getScale('scale_player_timeline')
+	playerpos = float(playerpos)/10000
+	vlcPlayer.set_position(playerpos)
+
+def updatePlayerInfo():
+	state = str(vlcPlayer.get_state()).lower().replace('state.','')
+	if state == 'playing':
+		app.hideButton('btn_player_play')
+		app.showButton('btn_player_pause')
+		app.setLabel('player_current_playing_title',cropText(' '.join(app.getListBox("list_queue")),cropnum=17))
+		app.setLabel('player_author',cropText(library[currentlyPlaying]['author']))
+		app.setLabel('player_name',cropText(library[currentlyPlaying]['name']))
+		playerpos = vlcPlayer.get_position()
+		playerpos = int(playerpos*10000)
+		try:
+			app.setScale('scale_player_timeline',playerpos,callFunction=False)
+		except:
+			pass
+		# 00:00:00/00:00:00
+		app.setLabel('lbl_player_timeline_timeframe',f'{milliFormat(vlcPlayer.get_time(),subtractH=True)}/{milliFormat(vlcPlayer.get_length(),subtractH=True)}')
+	elif state == 'paused':
+		app.showButton('btn_player_play')
+		app.hideButton('btn_player_pause')
+		app.setLabel('player_current_playing_title',cropText(' '.join(app.getListBox("list_queue")),cropnum=17))
+		app.setLabel('player_author',cropText(library[currentlyPlaying]['author']))
+		app.setLabel('player_name',cropText(library[currentlyPlaying]['name']))
+	else:
+		app.showButton('btn_player_play')
+		app.hideButton('btn_player_pause')
+		app.setLabel('player_current_playing_title','Nothing playing')
+		app.setLabel('player_author','No author')
+		app.setLabel('player_name','No name')
+
+def nextFile():
+	try:
+		app.selectListItemAtPos('list_queue',audioFiles.index(''.join(app.getListBox('list_queue')))+1,callFunction=True)
+	except:
+		pass
+
+def previousFile():
+	try:
+		app.selectListItemAtPos('list_queue',audioFiles.index(''.join(app.getListBox('list_queue')))-1,callFunction=True)
+	except:
+		pass
+
+def playFile(filename):
+	media = vlcInstance.media_new(filename)
+	media.get_mrl()
+	vlcPlayer.set_media(media)
+	vlcPlayer.play()
+
+def queueClick(name):
+	global library
+	listBox = app.getListBox('list_queue')
+	if len(listBox) > 0:
+		filename=app.getListBox("list_queue")[0]
+	else:
+		return
+	directory=library[currentlyPlaying]["directory"]
+	fullfilename = f'{directory}/{filename}'
+	playFile(fullfilename)
+	library[currentlyPlaying]['leftoff']['file'] = filename
+	app.setLabel('player_current_playing_title',' '.join(app.getListBox("list_queue")))
+	app.setLabel('player_author',library[currentlyPlaying]['author'])
+	app.setLabel('player_name',library[currentlyPlaying]['name'])
+
+
+
+def preparePlayer(entry):
+	global audioFiles
+	audioFiles = getAudioFiles(entry['directory'])
+	app.updateListBox('list_queue',audioFiles,callFunction=False)
+	global currentlyPlaying
+	app.setImage('player_image',entry['thumbnail'])
+	currentlyPlaying = entry['name']
+	leftoffFile = entry['leftoff']['file']
+	leftoffTime = entry['leftoff']['time']
+	if leftoffFile != None and leftoffFile in audioFiles:
+		app.selectListItem('list_queue',leftoffFile)
+	else:
+		app.selectListItem('list_queue',audioFiles[0])
+	if leftoffTime != 0:
+		vlcPlayer.set_position(leftoffTime)
+	app.showSubWindow('window_player')
+
+
+
+def playerButtons(name):
+	if name == 'btn_player_play':
+		vlcPlayer.play()
+		app.hideButton('btn_player_play')
+		app.showButton('btn_player_pause')
+	elif name == 'btn_player_pause':
+		updateLeftoffTime()
+		vlcPlayer.set_pause(1)
+		app.showButton('btn_player_play')
+		app.hideButton('btn_player_pause')
+	elif name == 'btn_player_fastforward':
+		vlcPlayer.set_time(vlcPlayer.get_time()+30000)
+	elif name == 'btn_player_fastbackbackward':
+		vlcPlayer.set_time(vlcPlayer.get_time()-30000)
+	elif name == 'btn_player_next':
+		nextFile()
+	elif name == 'btn_player_previous':
+		previousFile()
+
+# external file loading stuff
+
+def getAudioFiles(directory):
+	audioFiles = []
+	for item in os.listdir(directory):
+		if os.path.isfile(f'{directory}/{item}'):
+			if item.endswith('.mp3') or item.endswith('.m4a') or item.endswith('.wav'):
+				audioFiles.append(item)
+	audioFiles.sort()
+	return audioFiles
+
+def saveLibrary():
+	app.debug(f'saving library.json')
+	try:
+		with open('library.json','w') as f:
+			f.write(json.dumps(library))
+			app.debug('library.json saved.')
+	except BaseException as e:
+		app.critical(f'error writing library.json: {e}')
+
+def libraryInit():
+	app.info('loading library')
+	try:
+		if os.path.isfile('library.json'):
+			app.debug('library.json exists')
+			with open('library.json','r') as f:
+				library=json.loads(f.read())
+				app.debug(f'library loaded: {", ".join(library)}')
+		else:
+			app.debug('library.json doesnt exist')
+			with open('library.json','w') as f:
+				library={}
+				f.write(json.dumps(library))
+				app.debug(f'library.json file written')
+	except BaseException as e:
+		app.critical(f'error reading/writing library.json: {e}')
+		app.warningBox('Critical error',f'Could not read/write library file.\n{e}')
+		library = {}
+	app.info('done loading library')	
+	return library
+
+def loadTheme():
+	app.info('loading default theme')
+	try:
+		if os.path.isfile('theme.json'):
+			app.debug('theme.json exists')
+			with open('theme.json','r') as f:
+				defaultTheme = f.read()
+				app.debug(f'theme.json read: {defaultTheme}')
+		else:
+			app.debug('theme.json doesnt exist')
+			with open('theme.json','w') as f:
+				defaultTheme = 'breeze'
+				f.write(defaultTheme)
+				app.debug(f'theme.json written, default theme set as {defaultTheme}')
+	except BaseException as e:
+		app.error(f'error reading/writing theme.json: {e}')
+		app.warningBox('Error',f'Could not import default theme.\n{e}')
+		defaultTheme = 'breeze'
+	try:
+		app.setTtkTheme(defaultTheme)
+	except BaseException as e:
+		app.error(f'could not set Ttk theme: {e}, falling back on breeze & attempting removal of theme.json')
+		app.setTtkTheme('breeze')
+		os.remove('theme.json')
+
+	themes = app.getTtkThemes()
+	try:
+		themes.sort()
+	except BaseException as e:
+		app.error(f'error sorting themes ({e}), attempting fix')
+		themes = list(themes)
+		themes.sort()
+	app.debug(f'availible themes: {", ".join(themes)}')
+	for item in themes:
+		if item == defaultTheme:
+			app.addMenuRadioButton('Ttk theme','radio_theme',item,ttkThemeSwitcher,underline=0)
+		else:
+			app.addMenuRadioButton('Ttk theme','radio_theme',item,ttkThemeSwitcher)
+	app.setMenuRadioButton('Ttk theme','radio_theme',defaultTheme)
+	app.info('done loading default theme')
+
+
+
+# button functions
+
+def libraryButton(name):
+	name = name.replace('libraryEntry_thumbnail_','')
+	if vlcPlayer.is_playing() and currentlyPlaying == name:
+		app.showSubWindow('window_player')
+	else:
+		app.debug(f'playing {name}')
+		preparePlayer(library[name])
+
+def ttkThemeSwitcher(name):
+	theme =app.getMenuRadioButton('Ttk theme','radio_theme')
+	app.info(f'switching to ttk theme {theme}')	
+	try:
+		app.setTtkTheme(theme)
+	except BaseException as e:
+		app.error(f'error switching Ttk theme: {e}')
+
+def toolbarButtons(name):
+	if name == 'Add new entry':
+		app.clearAllEntries(callFunction=False)
+		app.showSubWindow('window_newLib')
+	elif name == 'Open player':
+		app.showSubWindow('window_player')
+	elif name == 'Sort library':
+		sortLibraryEntries()
+	elif name == 'radio_color':
+		changeColorScheme(app.getMenuRadioButton('Color scheme','radio_color'))
+	elif name == 'About':
+		app.infoBox('About',f'Pycasts version {version} (build {buildDate})\nMade by Anne mocha (@mocchapi) for Lilli snaog :>\nFollow development at https://github.com/mocchapi/PyCasts')
+
+def newLibButtons(name):
+	if name == 'btn_newLib_cancel':
+		app.hideSubWindow('window_newLib')
+		app.clearAllEntries(callFunction=False)
+	if name == 'btn_newLib_save':
+		entries=app.getAllEntries()
+		for key in entries:
+			if entries[key] == '' and key != 'entry_newLib_thumbnail' and key.startswith('entry_newLib'):
+				app.warningBox('Missing info','Please fill in all fields')
+				return
+		tempdict = {}
+		tempdict['name'] = entries['entry_newLib_name']
+		tempdict['author'] = entries['entry_newLib_author']
+		if os.path.isdir(entries['entry_newLib_directory']):
+			tempdict['directory'] = entries['entry_newLib_directory']
+		else:
+			app.warningBox('Invalid directory','The entered directory is invalid')
+		if entries['entry_newLib_thumbnail'] == '':
+			thumbnail = 'no_image.gif'
+		else:
+			thumbnail = entries['entry_newLib_thumbnail']
+		if os.path.isfile(thumbnail) and thumbnail.endswith('.gif'):
+			tempdict['thumbnail'] = thumbnail
+		else:
+			app.warningBox('Invalid file','The entered file is invalid.\nMust be an image of type .gif @ 150x150.\nThis entry can be left blank.')
+			return
+		tempdict['leftoff'] = {'file':None,'time':0}
+		global library
+		library[tempdict['name']] = tempdict
+		app.info(f'Added library entry {tempdict}')
+		app.hideSubWindow('window_newLib')
+		app.clearAllEntries()
+		saveLibrary()
+		buildEntry(tempdict)
+
+
+def editEntryButton(name):
+	name = name.replace('Edit ','')
+	global editedEntry
+	editedEntry=name
+	openEditWindow(name)
+
+def editEntryOtherButton(name):
+	if name == 'btn_editLib_save':
+		editEntry(editedEntry)
+		app.hideSubWindow('window_editLib')
+	else:
+		app.clearAllEntries()
+		app.hideSubWindow('window_editLib')
+
+def removeEntryButton(name):
+	name = name.replace('Remove ','')
+	if app.yesNoBox('Confirm',f'Are you sure you want to remove {name}?'):
+		removeEntry(name)
+		del library[name]
+		saveLibrary()
+
+# UI stuff
+def sortLibraryEntries():
+	app.debug('sorting library entries')
+	global libraryY
+	global libraryX
+	libraryX = 0
+	libraryY = 0
+	for entry in library:
+		removeEntry(library[entry]['name'])
+	reorderLibrary()
+	for entry in library:
+		buildEntry(library[entry])
+
+def openEditWindow(name):
+	app.debug(f'editing {name}')
+	app.setEntry('entry_editLib_thumbnail',library[name]['thumbnail'])
+	app.setEntry('entry_editLib_directory',library[name]['directory'])
+	app.setEntry('entry_editLib_name',library[name]['name'])
+	app.setEntry('entry_editLib_author',library[name]['author'])
+	app.showSubWindow('window_editLib')
+
+def editEntry(entry):
+	entries=app.getAllEntries()
+	for key in entries:
+		if entries[key] == '' and key != 'entry_editLib_thumbnail' and key.startswith('entry_editLib'):
+			app.warningBox('Missing info','Please fill in all fields')
+			return
+	tempdict = {}
+	tempdict['name'] = entries['entry_editLib_name']
+	tempdict['author'] = entries['entry_editLib_author']
+	if os.path.isdir(entries['entry_editLib_directory']):
+		tempdict['directory'] = entries['entry_editLib_directory']
+	else:
+		app.warningBox('Invalid directory','The entered directory is invalid')
+	if entries['entry_editLib_thumbnail'] == '':
+		thumbnail = 'no_image.gif'
+	else:
+		thumbnail = entries['entry_editLib_thumbnail']
+	if os.path.isfile(thumbnail) and thumbnail.endswith('.gif'):
+		tempdict['thumbnail'] = thumbnail
+	else:
+		app.warningBox('Invalid file','The entered thumbnail is invalid.\nMust be an image of type .gif @ 150x150.\nThis entry can be left blank.')
+		return
+	tempdict['leftoff'] = {'file':None,'time':0}
+	global library
+	tempdict['leftoff'] = library[entry]['leftoff']
+	del library[entry]
+	library[tempdict['name']] = tempdict
+	app.info(f'Added library entry {tempdict}')
+	app.hideSubWindow('window_editLib')
+	app.clearAllEntries()
+	saveLibrary()
+	sortLibraryEntries()
+
+def removeEntry(name):
+	try:
+		app.info(f'removing {name}')
+		app.emptyLabelFrame(f'libraryEntry_frame_{name}')
+		app.removeLabelFrame(f'libraryEntry_frame_{name}')
+	except BaseException as e:
+		app.error(f'couldnt remove entry {name}: {e}')
+
+def buildEntry(entrydict):
+	app.debug(f'building entry {entrydict["name"]}')
+	global libraryX
+	global libraryY
+	name = entrydict['name']
+	author = entrydict['author']
+	thumbnail = entrydict['thumbnail']
+	directory = entrydict['directory']
+
+	app.openScrollPane('frame_libraryView')
+	app.startLabelFrame(f'libraryEntry_frame_{name}',libraryY,libraryX,label='')
+	app.setSticky('n')
+	app.setStretch('column')
+	app.addImage(f'libraryEntry_thumbnail_{name}',thumbnail)
+	try:
+		app.setImageSize(f'libraryEntry_thumbnail_{name}',150,150)
+	except:
+		pass
+	#app.setImageMouseOver(f'libraryEntry_thumbnail_{name}','play_button.gif')
+	try:
+		app.createRightClickMenu(f'libraryEntry_rClick_{name}')
+		app.addMenuItem(f'libraryEntry_rClick_{name}',f'Edit {name}',editEntryButton)
+		app.addMenuItem(f'libraryEntry_rClick_{name}',f'Remove {name}',removeEntryButton)
+	except:
+		pass
+	app.setImageRightClick(f'libraryEntry_thumbnail_{name}',f'libraryEntry_rClick_{name}')
+	app.setImageSubmitFunction(f'libraryEntry_thumbnail_{name}',libraryButton)
+	app.setImagePadding(f'libraryEntry_thumbnail_{name}',[20,20])
+	app.addLabel(f'libraryEntry_name_{name}',cropText(name,cropnum=30))
+	app.addLabel(f'libraryEntry_author_{name}',cropText(author,cropnum=30))
+	app.stopLabelFrame()
+	app.stopScrollPane()
+	if libraryX < 4:
+		libraryX+=1
+	else:
+		libraryX=0
+		libraryY+=1
+
+def mainUI():
+	app.setFont(size=15, family="Open Sans")
+	app.setStretch('both')
+	app.setSticky('nesw')
+	app.startLabelFrame('frame_libraryLabel',label='Library')
+	app.setSticky('nesw')
+	app.startScrollPane('frame_libraryView')
+	app.setSticky('new')
+	app.setStretch('both')
+	app.stopScrollPane()
 	app.stopLabelFrame()
 
-
-def library_list(option,data=None):
-	app.debug('@library_list')
-	if option == 'append' and data !=None:
-		try:
-			current_lib = get_json()
-		except:
-			current_lib = []
-		print('data: ',data)
-		print('lib: ',current_lib)
-		current_lib.append(data)
-		print('current_lib:',current_lib)
-		save_json(current_lib)
-	elif option == 'get':
-		return get_json()
-
-
-def add_folder():
-	app.debug('@add_folder')
-	directory = app.directoryBox('select folder')
-	print(directory)
-	if directory == None:
-		return
-	name = app.textBox('Podcast name','Please enter the podcast name.')
-	if name == None:
-		return
-	author = app.textBox('Author name','Please enter the podcast author(s).')
-	if author == None:
-		return
-	else:
-		newLibEntry = {'name':name,'author':author,'folder':directory,'leftoff_file':None,'leftoff_timestamp':None}
-		library_list('append',newLibEntry)
-		new_library_icon(newLibEntry)
-		update_remove_submenu()
-
-def update_remove_submenu():
-	app.debug('@update_remove_submenu')
-	names = get_names()
-#	app.removeMenu'Remove')
-	app.addSubMenu('Library','Remove')
-	app.addMenuList('Remove',names,toolbar_remove_entry)
+	app.addMenuList('Library',['Add new entry','Sort library'],toolbarButtons)
+	app.addMenuList('View',['About','Open player'],toolbarButtons)
+	app.addSubMenu('View','Ttk theme')
 
 
 
-def select_podcast(name):
-	pass
+def playerUI():
+	app.startSubWindow('window_player','Player',transient=False,modal=False)
+	app.setStopFunction(closePlayerWindow)
+	app.setFont(size=12, family="Open Sans")
+	app.setSize(600, 350)
 
 
-#toolbar
-def toolbar_remove_entry(name):
-	print(f'remove entry {name}')
-	library = library_list('get')
-	for indx,entry in enumerate(library):
-		if entry['name'] == name:
-			print(f'{entry["name"]} == {name}')
-			del library[indx]
-			save_json(library)
-			refresh_library()
+	app.setStretch('both')
+	app.setSticky('nesw')
+	app.startFrame('player_frame_top',0,0)
+	app.setStretch('both')
+	app.setSticky('nesw')
+	app.startLabelFrame('player_frame_queue',0,1,label='Queue')
+	app.setStretch('both')
+	app.setSticky('nesw')
+	app.addListBox('list_queue', [])
+	app.setListBoxChangeFunction('list_queue',queueClick)
+	app.stopLabelFrame()
 
-def toolbar_buttons(name):
-	app.debug(f'@toolbar_buttons, data: {name}')
-	if name == 'Add folder to library':
-		add_folder()
-	if name == 'Refresh library':
-		refresh_library()
+	app.setStretch('row')
+	app.setSticky('nsw')
+	app.startFrame('player_frame_info',0,0)
+	app.setSticky('new')
+	app.setStretch('column')
+	app.addLabel('player_janky_image_spacer','')
+	app.addImage('player_image','no_image.gif')
+	app.addLabel('player_current_playing_title','Nothing playing')
+	app.addLabel('player_name','No name')
+	app.addLabel('player_author','No author')
+	app.getLabelWidget('player_current_playing_title').config(font='Arial 15')
+	app.getLabelWidget('player_author').config(font='Arial 12')
+	app.getLabelWidget('player_name').config(font='Arial 12')
+	app.stopFrame()
+	app.stopFrame()
+	'''
+	icons:
+	~/.local/lib/python3.6/site-packages/appJar:
 
-app.addMenuList('Library',['Add folder to library','Refresh library'],toolbar_buttons)
-app.addSubMenu('Library','Remove')
-try:
-	update_remove_submenu()
-except:
-	pass
-app.setStretch('both')
-app.setSticky('nesw')
-app.startLabelFrame('frame_libraryView',label='Library')
-app.setSticky('n')
-app.stopLabelFrame()
+	md-play >
+	md-pause II
+	md-fast-forward >>
+	md-fast-backward <<
+	md-next >I
+	md-previous I<
+	'''
+	app.setStretch('column')
+	app.setSticky('esw')
+	app.startFrame('player_frame_bottom',1,0)
+	app.setStretch('none')
+	app.setSticky('nes')
+	app.addLabel('controls go here')
+	app.addLabel('lbl_player_timeline_timeframe','00:00/00:00',0,1)
 
-load_library()
-app.go()
+	app.setStretch('column')
+	app.setSticky('nesw')
+	app.addScale('scale_player_timeline',0,0)
+	app.setScaleRange('scale_player_timeline',0,10000)
+	app.setScaleChangeFunction('scale_player_timeline',timelineScrub)
+	app.setScaleIncrement('scale_player_timeline',0)
+	app.startFrame('frame_player_buttons',1,0,2)
+	app.setStretch('column')
+	app.setSticky('nesw')
+	app.addIconButton('btn_player_previous',playerButtons,'md-previous',1,0)
+	app.addIconButton('btn_player_fastbackbackward',playerButtons,'md-fast-backward',1,1)
+	app.addIconButton('btn_player_pause',playerButtons,'md-pause',1,2)
+	app.addIconButton('btn_player_play',playerButtons,'md-play',1,2)
+	app.hideButton('btn_player_pause')
+	app.addIconButton('btn_player_fastforward',playerButtons,'md-fast-forward',1,3)
+	app.addIconButton('btn_player_next',playerButtons,'md-next',1,4)
+	app.stopFrame()
+	app.stopFrame()
+	app.stopSubWindow()
+
+def newLibUI():
+	app.startSubWindow('window_newLib','Add library entry',transient=True,modal=True)
+	app.setSize('500x200')
+	app.setResizable(False)
+	app.setSticky('nesw')
+	app.setStretch('both')
+	app.startLabelFrame('frame_newLib',0,0,2,label='Configure library entry')
+	app.setSticky('new')
+	app.setStretch('column')
+	app.addEntry('entry_newLib_name',3,3)
+	app.addEntry('entry_newLib_author',6,3)
+	app.addDirectoryEntry('entry_newLib_directory',9,3)
+	app.addFileEntry('entry_newLib_thumbnail',12,3)
+	app.setSticky('nw')
+	app.setStretch('none')
+	app.addLabel('lbl_newLib_name','Name',3,1)
+	app.addLabel('lbl_newLib_author','Author(s)',6,1)
+	app.addLabel('lbl_newLib_directory','Podcast folder ',9,1)
+	app.addLabel('lbl_newLib_thumbnail','Thumbnail (optional) ',12,1)
+	app.stopLabelFrame()
+	app.setSticky('esw')
+	app.setStretch('column')
+	app.addNamedButton('Cancel','btn_newLib_cancel',newLibButtons,3,0)
+	app.addNamedButton('Save','btn_newLib_save',newLibButtons,3,1)
+	app.stopSubWindow()
+
+def editLibUI():
+	app.startSubWindow('window_editLib','Edit library entry',transient=True,modal=True)
+	app.setSize('500x200')
+	app.setResizable(False)
+	app.setSticky('nesw')
+	app.setStretch('both')
+	app.startLabelFrame('frame_editLib',0,0,2,label='Configure library entry')
+	app.setSticky('new')
+	app.setStretch('column')
+	app.addEntry('entry_editLib_name',3,3)
+	app.addEntry('entry_editLib_author',6,3)
+	app.addDirectoryEntry('entry_editLib_directory',9,3)
+	app.addFileEntry('entry_editLib_thumbnail',12,3)
+	app.setSticky('nw')
+	app.setStretch('none')
+	app.addLabel('lbl_editLib_name','Name',3,1)
+	app.addLabel('lbl_editLib_author','Author(s)',6,1)
+	app.addLabel('lbl_editLib_directory','Podcast folder ',9,1)
+	app.addLabel('lbl_editLib_thumbnail','Thumbnail (optional) ',12,1)
+	app.stopLabelFrame()
+	app.setSticky('esw')
+	app.setStretch('column')
+	app.addNamedButton('Cancel','btn_editLib_cancel',editEntryOtherButton,3,0)
+	app.addNamedButton('Save','btn_editLib_save',editEntryOtherButton,3,1)
+	app.stopSubWindow()
+
+def setup():
+	app.setSize('835x500')
+	app.setIcon('ico.gif')
+	app.setLogLevel('debug')
+
+	global libraryY
+	global libraryX
+	libraryY = 0 
+	libraryX = 0
+	app.setStartFunction(setupTime)
+	app.setStopFunction(stopFunction)
+
+if __name__ == '__main__':
+	version = '1.0.0'
+	buildDate = '24/5/2020'
+	# very first things, init of appjar & basic global settings, stage 0
+	starttime = time.time()
+	app = gui('PyCasts library','10x10',useTtk=True,startWindow=None)
+	app.debug('###stage 0###')
+	app.debug(f'version {version} @ {buildDate}')
+	setup()
+	#window ui gets set up here, stage 1
+	app.debug('###stage 1###')
+	mainUI()
+	playerUI()
+	newLibUI()
+	editLibUI()
+	# external data (jsons) getloaded, stage 2
+	app.debug('###stage 2###')
+	loadTheme()
+	library = libraryInit()
+	# building library, stage 3
+	app.debug('###stage 3###')
+	reorderLibrary()
+	for entry in library:
+		buildEntry(library[entry])
+	# vlc initialisation, stage 4
+	app.debug('###stage 4###')
+	try:
+		vlcInstance = vlc.Instance()
+		vlcPlayer = vlcInstance.media_player_new()
+		app.info('Vlc instance created')
+	except BaseException as e:
+		app.critical(f'error creating vlc instance: {e}')
+		app.critical(f'cannot continue')
+		app.warningBox('critical error','')
+		exit()
+	app.thread(saveTimeAndFile)
+	app.registerEvent(updatePlayerInfo)
+	app.setPollTime(500)
+	currentlyPlaying = None
+	app.debug('###all stages complete###')
+	app.go()

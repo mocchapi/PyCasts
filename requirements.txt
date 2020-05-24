@@ -1,0 +1,4 @@
+python-vlc
+appJar
+ttkthemes
+tkinter
