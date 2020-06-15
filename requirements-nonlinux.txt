@@ -1,4 +1,5 @@
 python-vlc
 appJar
 ttkthemes
+tkinter
 Pillow
