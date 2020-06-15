@@ -62,10 +62,12 @@ def stopFunction():
 		return True
 
 def milliFormat(milliseconds,subtractH=True):
-	if subtractH:
-		milliseconds = milliseconds-3600000
-	return datetime.datetime.fromtimestamp(milliseconds / 1000).strftime('%H:%M:%S')
-
+	try:
+		if subtractH:
+			millisecondos = milliseconds-3600000
+		return datetime.datetime.fromtimestamp(millisecondos / 1000).strftime('%H:%M:%S')
+	except:
+		return datetime.datetime.fromtimestamp(milliseconds / 1000).strftime('%H:%M:%S')
 # player functions
 
 def closePlayerWindow():
@@ -533,7 +535,7 @@ def playerUI():
 	app.startSubWindow('window_player','PyCasts Player',transient=False,modal=False)
 	app.setStopFunction(closePlayerWindow)
 	app.setFont(size=12, family="Open Sans")
-	app.setSize(600, 350)
+	app.setSize(600, 400)
 
 
 	app.setStretch('both')
