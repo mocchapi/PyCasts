@@ -44,6 +44,7 @@ def cropText(text,cropnum=25):
 	else:
 		return text
 
+
 def stopFunction():
 	try:
 		stoppingtime = time.time()
@@ -90,7 +91,7 @@ def saveTimeAndFile():
 	while True:
 		state = str(vlcPlayer.get_state()).lower().replace('state.','')
 		if state == 'playing' or state == 'paused':
-			library[currentlyPlaying]['leftoff']['file'] = "".join(app.getListBox("list_queue"))
+			library[currentlyPlaying]['leftoff']['file'] = currentFile
 			updateLeftoffTime()	
 			app.debug(f'saved leftoff time & file ({library[currentlyPlaying]["leftoff"]["time"]}, {library[currentlyPlaying]["leftoff"]["file"]})')
 			saveLibrary()
@@ -106,7 +107,7 @@ def updatePlayerInfo():
 	if state == 'playing':
 		app.hideButton('btn_player_play')
 		app.showButton('btn_player_pause')
-		app.setLabel('player_current_playing_title',cropText(' '.join(app.getListBox("list_queue")),cropnum=17))
+		app.setLabel('player_current_playing_title',cropText(currentFile,cropnum=17))
 		app.setLabel('player_author',cropText(library[currentlyPlaying]['author']))
 		app.setLabel('player_name',cropText(library[currentlyPlaying]['name']))
 		playerpos = vlcPlayer.get_position()
@@ -120,7 +121,7 @@ def updatePlayerInfo():
 	elif state == 'paused':
 		app.showButton('btn_player_play')
 		app.hideButton('btn_player_pause')
-		app.setLabel('player_current_playing_title',cropText(' '.join(app.getListBox("list_queue")),cropnum=17))
+		app.setLabel('player_current_playing_title',cropText(currentFile,cropnum=17))
 		app.setLabel('player_author',cropText(library[currentlyPlaying]['author']))
 		app.setLabel('player_name',cropText(library[currentlyPlaying]['name']))
 	else:
@@ -132,13 +133,13 @@ def updatePlayerInfo():
 
 def nextFile():
 	try:
-		app.selectListItemAtPos('list_queue',audioFiles.index(''.join(app.getListBox('list_queue')))+1,callFunction=True)
+		app.selectListItemAtPos('list_queue',audioFiles.index(currentFile)+1,callFunction=True)
 	except:
 		pass
 
 def previousFile():
 	try:
-		app.selectListItemAtPos('list_queue',audioFiles.index(''.join(app.getListBox('list_queue')))-1,callFunction=True)
+		app.selectListItemAtPos('list_queue',audioFiles.index(currentFile)-1,callFunction=True)
 	except:
 		pass
 
@@ -150,16 +151,17 @@ def playFile(filename):
 
 def queueClick(name):
 	global library
+	global currentFile
 	listBox = app.getListBox('list_queue')
 	if len(listBox) > 0:
-		filename=app.getListBox("list_queue")[0]
+		currentFile=app.getListBox("list_queue")[0]
 	else:
 		return
 	directory=library[currentlyPlaying]["directory"]
-	fullfilename = f'{directory}/{filename}'
+	fullfilename = f'{directory}/{currentFile}'
 	playFile(fullfilename)
-	library[currentlyPlaying]['leftoff']['file'] = filename
-	app.setLabel('player_current_playing_title',cropText(' '.join(app.getListBox("list_queue")),cropnum=17))
+	library[currentlyPlaying]['leftoff']['file'] = currentFile
+	app.setLabel('player_current_playing_title',cropText(currentFile,cropnum=17))
 	app.setLabel('player_author',library[currentlyPlaying]['author'])
 	app.setLabel('player_name',library[currentlyPlaying]['name'])
 
@@ -188,6 +190,7 @@ def rateScaleHandler():
 	currate = app.getScale('scale_player_rate')
 	setting = int(round(currate))
 	newrate = settings[setting]
+	app.setLabel('player_lbl_rate',f'{newrate}x')
 	app.setScale('scale_player_rate',setting,callFunction=False)
 	try:
 		vlcPlayer.set_rate(newrate)
@@ -195,7 +198,12 @@ def rateScaleHandler():
 		app.warn(f'cannot change playback rate: {e}')
 
 def volumeScaleHandler():
-	vlc.audio_set_volume(app.getScale('scale_player_volume'))
+	try:
+		newvolume = int(app.getScale('scale_player_volume'))
+		app.setLabel('player_lbl_volume',f'{newvolume}%')
+		vlcPlayer.audio_set_volume(newvolume)
+	except BaseException as e:
+		app.warn(e)
 
 
 def playerButtons(name):
@@ -602,14 +610,17 @@ def playerUI():
 	app.addIconButton('btn_player_next',playerButtons,'md-next',1,4)
 
 	app.startFrame('frame_player_buttons2',2,0,4)
-	app.setStretch('column')
+	app.setStretch('none')
 	app.setSticky('nsw')
 	app.addIconButton('btn_player_resetvolume',playerButtons,'md-volume-3',0,0)
 	app.addScale('scale_player_volume',0,1)
+	app.addLabel('player_lbl_volume','100%',0,2)
 	app.setSticky('nse')
 	app.addIconButton('btn_player_resetrate',playerButtons,'time',0,3)
 	app.addScale('scale_player_rate',0,4)
+	app.addLabel('player_lbl_rate','1x',0,5)
 	app.setScaleChangeFunction('scale_player_rate',rateScaleHandler)
+	app.setScaleChangeFunction('scale_player_volume',volumeScaleHandler)
 	app.setScaleRange('scale_player_volume',1,200)
 	app.setScaleRange('scale_player_rate',1,10)
 	app.setScale('scale_player_volume',100,callFunction=False)
@@ -683,9 +694,14 @@ def setup():
 	app.setStartFunction(setupTime)
 	app.setStopFunction(stopFunction)
 
-if __name__ == '__main__':
+def launchApp():
 	version = '1.1.0'
 	buildDate = '15/6/2020'
+	global app
+	global library
+	global vlcPlayer
+	global vlcInstance
+	global starttime
 	# very first things, init of appjar & basic global settings, stage 0
 	starttime = time.time()
 	app = gui('PyCasts library','10x10',useTtk=True,startWindow=None)
@@ -718,9 +734,15 @@ if __name__ == '__main__':
 		app.critical(f'cannot continue')
 		app.warningBox('critical error',f'error creating vlc instance: "{e}"\nIs VLC media player installed?')
 		exit()
+	currentlyPlaying = None
+	currentFile = None
 	app.thread(saveTimeAndFile)
 	app.registerEvent(updatePlayerInfo)
 	app.setPollTime(500)
-	currentlyPlaying = None
 	app.debug('###all stages complete###')
+	playerButtons('btn_player_resetrate')
+	playerButtons('btn_player_resetvolume')
+
+if __name__ == '__main__':
+	launchApp()
 	app.go()
